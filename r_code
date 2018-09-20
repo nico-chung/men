@@ -1,0 +1,1133 @@
+
+foundparaesti <- function(sim=sim,obsfound=obsfound,startFs=startFs,endFs=endFs,intFs=intFs,startFp=startFp,endFp=endFp,intFp=intFp,n=n){
+ 
+  ### FOUNDRESS PARAMETER ESTIMATOR ###
+  #***********************************#
+  # Uses Least Squares method to estimate two foundress parameters: 
+  # 1) Fs: size - target for number of successful trials, or dispersion parameter (the shape parameter of the gamma mixing distribution). Must be strictly positive, need not be integer. 
+  # 2) Fp: prob - probability of success in each trial [determines scale of gamma distribution (prob = scale/(1+scale))]. Should be greater than 0 and less than 1.
+  #
+  # foundparaesti estimates the two parameters of a negative binomial distribution that best approximates the observed foundress distribution via numerical solutions. 
+  # A range of candidate distriutions are generated via rejection sampling (zero truncated negative binomial). Each simulated distribution is then compared to the observed 
+  # species distribution (obsfound). Each comparison produces residual errors which are squared and summed (ie, the sum of squares). The minimum value(s) indicates the most likely 
+  # distribution parameters. 
+  #
+  #---INPUT PARAMETERS---#
+  # obsfound: vector of observed foundress counts per patch
+  # startFs: start of size range to be simulated
+  # endFs: end of size range to be simulated
+  # intFs: interval of size 
+  # startFp: start of prob range to be simulated
+  # endFp: end of prob range to be simulated
+  # intFp: interval of prob
+  # n: number of simulations
+  #***********************************#
+  
+  library(ggplot2)
+  library(reshape2)
+  
+  simulationparameters <- paste0("sim=",sim,",startFs=",startFs,",endFs=",endFs,",intFs=",intFs,
+                                 ",startFp=",startFp,",endFp=",endFp,",intFp=",intFp,",n=",n)
+  sampsize <- length(obsfound)
+  rssgrid <- data.frame(0) #residual sum of squares 
+  newrowname <- data.frame(0)
+  
+  x <- 1 #rssgrid row counter
+  y <- 1 #rssgrid column counter 
+  for (Fs in seq(startFs,endFs,intFs)){ #loops through sizes
+    for (Fp in seq(startFp,endFp,intFp)){ #loops through probs
+      
+      estfound<-rep(NA,n)
+      i<-0
+      while (i <= n){
+        k <- rnbinom(1,size=Fs,prob=Fp)
+        if (k==0){i<-i}else{estfound[i]<-k;i<-i+1}
+      }
+      
+      maxoff <- max(estfound) #used for x-lim of plot
+      if (max(obsfound)>max(estfound)){maxoff<-max(obsfound)}
+      
+      estdist <- hist(estfound,breaks=c(0:maxoff),include.lowest=F,plot=T) 
+      obsdist <- hist(obsfound,breaks=c(0:maxoff),include.lowest=F,plot=F) 
+      
+      rssgrid[x,y] <- sum((obsdist$counts[1:maxoff]-(estdist$counts[1:maxoff]*(sampsize/n)))^2)  
+      
+      y <- y+1
+    }                                                                             
+    x <- x+1 #rssgrid row counter
+    y <- 1 #reset rssgrid column counter 
+    p <- startFp #reset prob to original startFp after each sub-loop
+  }
+  
+  colnames(rssgrid) <- seq(startFp,endFp,intFp)
+  rownames(rssgrid) <- seq(startFs,endFs,intFs)
+  
+  #Gives the variables that produce the lowest RSS
+  inds <- which(rssgrid==min(rssgrid),arr.ind=TRUE)
+  rnames <- rownames(rssgrid)[inds[1]]
+  cnames <- colnames(rssgrid)[inds[2]]
+  minsum <- paste0("Min. RSS=",round(min(rssgrid),2),"; Fs=",rnames,"; Fp=",cnames)
+  
+  #Heat plot of results
+  rssgrid2 <- as.matrix(rssgrid)
+  names(rssgrid2) <- paste(seq(startFs,endFs,by=intFs))
+  rssgrid3 <- melt(rssgrid2,id.var=startFp)
+  
+  p <- ggplot(data=rssgrid3,aes(x=Var1,y=Var2),environment=environment()) +
+    xlab("Size") +
+    ylab("Prob") +
+    geom_tile(aes(fill=value),colour="white") + 
+    scale_fill_gradient(low="white",high="red",name="RSS") +
+    scale_x_continuous(breaks=seq(startFs,endFs,by=intFs)) +
+    scale_y_continuous(breaks=seq(startFp,endFp,by=intFp))
+  
+  q <- p + coord_fixed(ratio=1)
+  
+  plotname <- paste0(sim,".svg")
+  ggsave(plotname,width=length(rssgrid[,1])/1.7,height=length(rssgrid[1,])/1.7)
+  
+  return(list("Simulation Parameters"=simulationparameters,"Residual Sum of Squares (excl. zeros)"=round(rssgrid,2),"Estimated Parameters"=minsum))
+   
+}
+
+
+founddistcomp <- function(sim=sim,obsfound=obsfound,Fs=Fs,Fp=Fp,n=n){
+  
+  ### FOUNDRESS DISTRIBUTION COMPARISON ###
+  #***************************************#
+  # After running the FOUNDRESS PARAMETER ESTIMATOR function, the most likely estimated parameters are used here to 
+  # generate the estimated distribution at higher resolution and to test the significance between observed 
+  # and estimated distributions using a Pearson's chi-squared test.
+  #*********************************#
+  
+  library(ggplot2)
+  
+  simulationparameters <- paste0("sim=",sim,",Fs=",Fs,",Fp=",Fp,",n=",n)
+  sampsize <- length(obsfound)
+ 
+  estfound<-rep(NA,n)
+  i<-0
+  while (i <= n){
+    k <- rnbinom(1,size=Fs,prob=Fp)
+    if (k==0){i<-i}else{estfound[i]<-k;i<-i+1}
+  }
+  
+  maxoff <- max(estfound) #used for x-lim of plot
+  if (max(obsfound)>max(estfound)){maxoff<-max(obsfound)}
+  
+  #chi-square goodness-of-fit test 
+  bins <- c(seq(0,maxoff,1))
+  poolestdist <- hist(estfound,breaks=bins,include.lowest=F,plot=F) 
+  poolobsdist <- hist(obsfound,breaks=bins,include.lowest=F,plot=F)
+  #chi-square test cannot test bins of 0 vs 0 so a small number (effectively zero) is substituted
+  for (i in 1:maxoff){ 
+    if (poolestdist$counts[i]==0){poolestdist$counts[i]<-1e-10}
+    if (poolobsdist$counts[i]==0){poolobsdist$counts[i]<-1e-10} 
+  }
+  bindcounts <- cbind(poolobsdist$counts,(poolestdist$counts*(sampsize/length(estfound)))) 
+  goodfit <- chisq.test(bindcounts,simulate.p.value=T,B=1e+06)
+  
+  contab <- matrix(0,nrow=length(bins),ncol=2)
+  contab[,1] <- c(floor(poolobsdist$counts),sum(poolobsdist$counts))
+  contab[,2] <- c(round(poolestdist$counts*(sampsize/length(estfound)),4),sum(poolestdist$counts*(sampsize/length(estfound))))
+  newrowname <- c(seq(1,maxoff,1))
+  newrowname <- c(newrowname,"Total")
+  rownames(contab) <- newrowname
+  colnames(contab) <- c("Observed","Expected")
+  
+  #bind observed and estimated distributions
+  obs <- data.frame(foundress=obsfound)
+  est <- data.frame(foundress=estfound)
+  obs$Distribution <- "Observed"
+  est$Distribution <- "Estimated"
+  binddist <- rbind(obs,est)
+  
+  #histogram
+  o <- ggplot(binddist,aes(x=foundress,y=..density..,fill=Distribution)) + 
+    geom_histogram(binwidth=1,alpha=0.5,position="identity") + 
+    xlab("Foundress count") +
+    ylab("Density") + 
+    theme_bw() + 
+    theme(legend.position="bottom") +
+    theme(legend.title=element_blank())
+  plotname <- paste0(sim,".svg")
+  ggsave(plotname)
+  
+  means <- paste0("Observed=",round(mean(obsfound),2),"; Estimated=",round(mean(estfound),2))
+  
+  return(list("Simulation Parameters"=simulationparameters,"Distribution Means"=means,"Contingency Table"=contab,goodfit))
+  
+}
+
+
+eggparaesti <- function(sim=sim,obsoff=obsoff,startFe=startFe,endFe=endFe,Oa=Oa,startDv=startDv,endDv=endDv,intDv=intDv,n=n){                       
+  
+  ### EGG PARAMETER ESTIMATOR ###
+  #*****************************#
+  # Uses Least Squares method to estimate three egg parameters: 
+  # 1) Fe: egg load lambda (poisson distributed). This is not the same as eggs actually laid, simply the potential to lay this many eggs.   
+  # 2) Dm: egg death mean (negative binomial distributed). Mortality is not density dependent, ie. larger clutches do not get killed more than smaller broods.
+  # 3) Dv: egg death variance
+  #
+  # eggparaesti estimates the three egg parameters via numerical methods instead of model fitting since assumed distribution generation process does not 
+  # fit any conventional distributions. It works by generating a series of candidate distributions by looping through a range of Fe's (startFe to endFe), 
+  # sub-looping through a series of Dv's (startDv to endDv) and sub-looping through a range of death rates (Dm) that will produce the same average clutch size as 
+  # the observed. Each simulated distribution is then compared to the observed species distribution (obsoff). Each comparison produces residual errors which 
+  # are squared and summed (ie, the sum of squares). The minimum value(s) indicates the most likely population parameters. Zeros (total clutch mortality) are excluded 
+  # from the comparisons because there was no way to capture that data.
+  #
+  #---INPUT PARAMETERS---#
+  # obsoff: vector of observed single foundress offspring counts 
+  # startFe: start of egg load lambda range to be simulated
+  # endFe: end of egg range load lambda to be simulated
+  # startDv: start of death variance range to be simulated
+  # endDv: end of death variance range to be simulated
+  # intDv: the size of jumps between Dv's - should be a divisor of startDv and endDv
+  # n: number of simulations 
+  #*****************************#
+  
+  library(ggplot2)
+  library(reshape2)
+  
+  simulationparameters <- paste0("sim=",sim,",startFe=",startFe,",endFe=",endFe,",Oa=",Oa,",startDv=",startDv,",endDv=",endDv,",intDv=",intDv,",n=",n)
+  sampsize <- length(obsoff) #number of observations for species data
+  rssgrid <- data.frame(0) #residual sum of squares 
+  meansgrid <- data.frame(0) #simulated egg load means
+  Dmused <- data.frame(0) #death rates used
+  newrowname <- data.frame(0) 
+  neweggs2mean <- numeric(1) #mean of clutches after deaths, excluding total brood mortality 
+  
+  ## Fe <- startFe ##
+  x <- 1 #rssgrid row counter
+  y <- 1 #rssgrid column counter 
+  for (Fe in startFe:endFe){ #loops through Fe's
+    for (Dv in seq(startDv,endDv,intDv)){ #loops through Dv's, in increments of intDv  
+      startDm <- ceiling(startFe-mean(obsoff))
+      for (Dm in startDm:1000){ #loops though Dm's in increments of 1 if generated mean is not at least as small as observed offspring mean
+        p <- Dm/Dv
+        s <- (Dm^2)/(Dv-Dm)
+        o <- rpois(n,Oa) #vector of ovules
+        e <- rpois(n,Fe) #vector of eggs
+        d <- rnbinom(n,size=s,prob=p) #vector of deaths 
+        for (z in 1:n) if (e[z]>o[z]){e[z]<-o[z]} #if eggs laid exceeds ovule number, then eggs laid=ovule number
+        for (i in 1:n) if (d[i]>e[i]){d[i]<-e[i]} #if death mean exceeds clutch size, then death mean=clutch size (ie. total clutch mortality) 
+        neweggs <- e-d #vector of all final clutches
+        neweggs2 <- neweggs[neweggs>0] #vector of all non-zero final clutches
+        neweggs2mean <- sum(neweggs2)/length(neweggs2) #mean survived eggs, excluding zeros 
+        if (neweggs2mean > mean(obsoff)){Dm<-Dm+1} else {Dmused[x,y]<-Dm; break} #if simulated mean is more than real species mean, then keep increasing death by 1
+      }
+      
+      maxoff <- max(neweggs2) #used for x-lim of distribution 
+      if (max(obsoff)>max(neweggs2)){maxoff<-max(obsoff)}
+      
+      #1 goes in bin 0-1, 2 goes in bin 1-2 etc. 
+      estdist <- hist(neweggs2,breaks=c(0:maxoff),include.lowest=F,plot=T) #generated distribution 
+      obsdist <- hist(obsoff,breaks=c(0:maxoff),include.lowest=F,plot=F) #observed distribution
+      
+      #residual sum of squares 
+      #using distribution densities or raw numbers yields same parameter estimates
+      #estimated counts is scaled to the same size as observed counts
+      rssgrid[x,y] <- sum((obsdist$counts[1:maxoff]-(estdist$counts[1:maxoff]*(sampsize/n)))^2)  
+      
+      #estimated means
+      #zeros not included in mean calculation because I don't have data on zeros so I can't compare them
+      meansgrid[x,y] <- neweggs2mean
+      
+      y <- y+1
+    }                                                                             
+    x <- x+1 #rssgrid row counter
+    y <- 1 #reset rssgrid column counter 
+    Dv <- startDv #reset Dv counter to original startDv after each sub-loop
+  }
+  
+  rownames(rssgrid) <- rownames(meansgrid) <- rownames(Dmused) <- seq(startFe,endFe,1)
+  colnames(rssgrid) <- colnames(meansgrid) <- colnames(Dmused) <- seq(startDv,endDv,intDv)
+  
+  #Gives the variables that produce the lowest RSS
+  inds <- which(rssgrid==min(rssgrid),arr.ind=TRUE)
+  rnames <- rownames(rssgrid)[inds[1]]
+  cnames <- colnames(rssgrid)[inds[2]]
+  minsum <- paste0("Min. RSS=",round(min(rssgrid),2),"; Fe=",rnames,"; Dm=",Dmused[inds[1],inds[2]],"; Dv=",cnames)
+  
+  #Heat plot of results
+  rssgrid2 <- as.matrix(rssgrid)
+  Dmused2 <- as.matrix(Dmused)
+  names(rssgrid2) <- paste(seq(startDv,endDv,by=intDv))
+  names(Dmused2) <- paste(seq(startDv,endDv,by=intDv))
+  rssgrid3 <- melt(rssgrid2,id.var=startDv)
+  Dmused3 <- melt(Dmused2,id.var=startDv)
+  
+  p <- ggplot(data=rssgrid3,aes(x=Var1,y=Var2),environment=environment()) +
+    xlab("Mean egg load") +
+    ylab("Death variance") +
+    geom_tile(aes(fill=value),colour="white") + 
+    geom_text(aes(fill=rssgrid3$value,label=Dmused3$value),size=2.5,colour="blue") +
+    scale_fill_gradient(low="white",high="red",name="RSS") +
+    scale_x_continuous(breaks=startFe:endFe) +
+    scale_y_continuous(breaks=seq(startDv,endDv,by=intDv)
+    )
+  q <- p + coord_fixed(ratio=1/intDv)
+  
+  plotname <- paste0(sim,".svg")
+  ggsave(plotname,width=length(rssgrid[,1])/1.7,height=length(rssgrid[1,])/1.7,limitsize=FALSE)
+  
+  return(list("Simulation Parameters"=simulationparameters,"Simulated Means (excl. zeros)"=round(meansgrid,2),
+              "Egg Death Mean (Dm)"=round(Dmused,2),"Residual Sum of Squares (excl. zeros)"=round(rssgrid,2),"Estimated Parameters"=minsum))
+  
+}
+
+
+eggdistcomp <- function(sim=sim,obsoff=obsoff,Fe=Fe,Oa=Oa,Dm=Dm,Dv=Dv,n=n,binsize=binsize){
+  
+  ### EGG DISTRIBUTION COMPARISON ###
+  #*********************************#
+  # After running the PARAMETER ESTIMATOR function, the most likely estimated parameters are used here to 
+  # generate the estimated distribution at higher resolution and to test the significance between observed 
+  # and estimated distributions using a Pearson's chi-squared test. 
+  #*********************************#
+  
+  library(ggplot2)
+  
+  simulationparameters <- paste0("sim=",sim,",Fe=",Fe,",Oa=",Oa,",Dm=",Dm,",Dv=",Dv,",n=",n,",binsize=",binsize)
+  sampsize <- length(obsoff)
+  
+  p <- Dm/Dv
+  s <- (Dm^2)/(Dv-Dm)
+  o <- rpois(n,Oa) 
+  e <- rpois(n,Fe) 
+  d <- rnbinom(n,size=s,prob=p)  
+  for (z in 1:n) if (e[z]>o[z]){e[z]<-o[z]} 
+  for (i in 1:n) if (d[i]>e[i]){d[i]<-e[i]}  
+  neweggs <- e-d
+  neweggs2 <- neweggs[neweggs>0] #vector of all non-zero final clutches
+  
+  maxoff <- max(neweggs2) #used for x-lim of plot
+  if (max(obsoff)>max(neweggs2)){maxoff<-max(obsoff)}
+  
+  #chi-square goodness-of-fit test 
+  #counts pooled into bins of size 'binsize'
+  roundup <- ceiling(maxoff/binsize)*binsize #rounds up to closest upper binsize
+  bins <- c(seq(0,roundup,binsize))
+  poolestdist <- hist(neweggs2,breaks=bins,include.lowest=F,plot=F) 
+  poolobsdist <- hist(obsoff,breaks=bins,include.lowest=F,plot=F) 
+  #chi-square test cannot test bins of 0 vs 0 so a small number (effectively zero) is substituted
+  for (i in seq(1,length(bins)-1,1)){ 
+    if (poolestdist$counts[i]==0){poolestdist$counts[i]<-1e-10}
+    if (poolobsdist$counts[i]==0){poolobsdist$counts[i]<-1e-10} 
+  }
+  bindcounts <- cbind(poolobsdist$counts,(poolestdist$counts*(sampsize/length(neweggs2)))) 
+  goodfit <- chisq.test(bindcounts,simulate.p.value=T,B=1e+06)
+  
+  #contingency table
+  contab <- matrix(0,nrow=length(bins),ncol=2)
+  contab[,1] <- c(floor(poolobsdist$counts),sum(poolobsdist$counts))
+  contab[,2] <- c(round(poolestdist$counts*(sampsize/length(neweggs2)),4),sum(poolestdist$counts*(sampsize/length(neweggs2))))
+  newrowname <- paste(seq(1,roundup,binsize),seq(binsize,roundup,binsize),sep="-")
+  newrowname <- c(newrowname,"Total")
+  rownames(contab) <- newrowname
+  colnames(contab) <- c("Observed","Expected")
+  
+  #bind observed and estimated distributions
+  obs <- data.frame(clutch=obsoff)
+  est <- data.frame(clutch=neweggs2)
+  obs$Distribution <- "Observed"
+  est$Distribution <- "Estimated"
+  binddist <- rbind(obs,est)
+  
+  #histogram
+  p1 <- ggplot(binddist,aes(x=clutch,y=..density..,fill=Distribution)) + 
+    geom_histogram(binwidth=binsize,alpha=0.5,position="identity") + 
+    xlab("Clutch Size") +
+    ylab("Density") + 
+    theme_bw() + 
+    theme(legend.position="bottom") +
+    theme(legend.title=element_blank())
+  plotname <- paste0(sim,"-A.svg")
+  ggsave(plotname)
+  
+  #density plot 
+  p2 <- ggplot(binddist, aes(clutch,fill=Distribution)) + 
+    geom_density(alpha=0.4) +
+    xlab("Clutch Size") +
+    ylab("Density") + 
+    theme_bw() + 
+    scale_fill_manual(values=c("red","blue")) + 
+    theme(legend.position="bottom") + 
+    theme(legend.title=element_blank())
+  plotname <- paste0(sim,"-B.svg")
+  ggsave(plotname)
+  
+  means <- paste0("Observed=",round(mean(obsoff),2),"; Estimated=",round(mean(neweggs2),2))
+  
+  return(list("Simulation Parameters"=simulationparameters,"Distribution Means"=means,"Contingency Table"=contab,goodfit))
+}
+
+
+malemod <- function(sim=sim,Fs=Fs,Fp=Fp,Fe=Fe,Oa=Oa,Dm=Dm,Dv=Dv,u=u,ps=ps,pe=pe,ms=ms,me=me,n=n){
+  
+  ### MALE OFFSPRING NUMBER MODEL ###
+  #*********************************#
+  # Determines the optimal male egg strategy given a specific population strategy.
+  # An ESS exists where the population strategy is unbeatable.
+  #
+  #---MODEL ASSUMPTIONS---#
+  # - Proximate sex ratio adjustment via constraint of available ovules 
+  # - Foundresses negative binomial distributed
+  # - Ovules, egg loads and male eggs are poisson distributed
+  # - Egg death per patch is negative binomial distributed
+  # - All foundresses on a patch are mated and oviposit simultaneouslly
+  # - Male eggs laid first (usually not constrained), rest of eggs are female
+  # - Number of egg deaths per patch is drawn randomly from a distribution that has been scaled proportionally to the total number of eggs in a patch
+  # - Deaths are then multinomially distributed proportionally amongst offspring classes (eg. male offspring of foundress 1)  
+  # - Inclusive fitness calculated with Greeff's (1995) sex ratio model (Note: does not account for dispersal or local resource competition) 
+  # - Offspring emerge and mate simultaneously and randomly
+  # - When oviposition is constrained on a multi-foundress patch, eggs laids are proportional to initial egg load 
+  # - Male offspring can mate with Fe-1 females
+  # Greeff, Jaco M. "Offspring allocation in structured populations with dimorphic males." Evolutionary Ecology 9.5 (1995): 550-558.
+  #
+  #---INPUT PARAMETERS---#
+  # sim: unique identifer for each simulation 
+  # Fs: size parameter for negative binomial foundress distribution  
+  # Fp: prob parameter for negative binomial foundress distribution
+  # Fe: lambda for number of eggs per foundress. Estimated by PARAMETER ESTIMATOR function. 
+  # Oa: lambda for the number of available ovules per patch
+  # Dm: death mean. Estimated by PARAMETER ESTIMATOR function. 
+  # Dv: death variance. It  cannot be lower than Dm. Estimated by PARAMETER ESTIMATOR function.
+  # u: size of jumps between populations and sons fitness; can be an integer or fraction; should be divisible by ps, pe, ms and me
+  # ps: start of range of lambda male offspring population strategy
+  # pe: end of range of lambda male offspring population strategy
+  # ms: start of range of lambda male offspring mutant strategies
+  # me: end of range of lambda male offspring mutant strategies
+  # n: number of simulations
+  # NOTE: to start searching from the beginning of the grid, ps and ms should be set to the same value as u, NOT zero 
+  #
+  #---INTERNAL PARAMETERS---#
+  # Sp: lambda for population strategy (Note: Sp and Sm are the lambdas of the distributions from which the foundresses samples the potential number of male eggs,
+  #     but if there is severe space consraints, the mean male eggs actually laid may not reflect lambda. Such a scenario should not happen under realstic assumptions)
+  # Sm: lambda(s) for mutant strategy
+  # j: number of foundresses on a patch
+  # k: number of foundresses on a patch (weighted)
+  # e: vector of the egg potential of all females in a patch
+  # l: vector of eggs actually laid
+  # fm: vector of male eggs actually laid
+  # ff: vector of female eggs actually laid
+  # o: number of available ovules for the patch
+  # d: number of deaths for for the patch
+  # dm: multinomial distribution of deaths on the patch
+  
+  #
+  # sda: focal foundress daughters mated
+  # sma: focal foundress sons' matings 
+  # S: focal foundress daughters mated by focal foundress sons
+  # SD: probability of sibmating
+  # x: maximum number of females a male can mate
+  # w: inclusive fitness
+  # vmRm: fitness contribution of sons
+  # vfRf: fitness contribution of daughters
+  #*********************************#
+  
+  library(ggplot2)
+  
+  ptm <- proc.time() #simulation timer 
+  options(max.print=10000000) #allow the output of the whole matrix
+  
+  if (u == 0 | ms == 0 | ps == 0){
+    return("Error: u, ms and ps cannot start from 0")
+  }else if (ms/u - floor(ms/u) > 0 | me/u - floor(me/u) > 0 | 
+              ps/u - floor(ps/u) > 0 | pe/u - floor(pe/u) > 0){
+    return("Error: u has to be a divisor of ms, pe, ps and pe")
+  }else if (ms > me){
+    return("Error: ms cannot be more than me.")  #returnfunction
+  }else if (ps >= pe){
+    return("Error: pe cannot be more than or equal to ps")
+  }else if (ms > ps){ 
+    return("Error: ms cannot be more than ps")
+  }else if (me < pe){
+    return("Error: me have to be more than pe")  
+  }else{
+    
+    ms <- ms/u 
+    me <- me/u
+    ps <- ps/u
+    pe <- pe/u
+    
+    fitnessmat <- matrix(0,nrow=pe,ncol=me) #matrix of fitness results 
+    toteggslaidmat <- matrix(0,nrow=pe,ncol=me) #matrix of mean total eggs laid of all foundresses
+    totsurvoffmat <- matrix(0,nrow=pe,ncol=me) #matrix of total surviving offspring means of all foundresses
+    totsurvoffvarmat <- matrix(0,nrow=pe,ncol=me) #matrix of variance of total surviving offspring of all foundresses
+    maleeggslaidmat <- matrix(0,nrow=pe,ncol=me) #matrix of mean male eggs actually laid of focal foundresses
+    offeggslaidmat <- matrix(0,nrow=pe,ncol=me) #matrix of mean offspring eggs actually laid of focal foundresses
+    survmalemat <- matrix(0,nrow=pe,ncol=me) #matrix of surviving male offspring mean of focal foundresses
+    survmalevarmat <- matrix(0,nrow=pe,ncol=me) #matrix of surviving male offspring variance of focal foundress
+    survoffmat <- matrix(0,nrow=pe,ncol=me) #matrix of surviving offspring mean of focal foundresses
+    survoffvarmat <- matrix(0,nrow=pe,ncol=me) #matrix of surviving offspring variance of focal foundresses
+    sibmateprobmat<- matrix(0,nrow=pe,ncol=1) #column of sib-mating probabilities for each population
+    primsexratmat <- matrix(0,nrow=pe,ncol=me) #matrix of primary sex ratio of focal foundresses 
+    primsexratvarmat <- matrix(0,nrow=pe,ncol=me) #matrix of primary sex ratio variances of focal foundresses 
+    secsexratmat <- matrix(0,nrow=pe,ncol=me) #matrix of secondary sex ratio of focal foundresses 
+    secsexratvarmat <- matrix(0,nrow=pe,ncol=me) #matrix of secondary sex ratio variances of focal foundresses
+    
+    #generates vector of non-zero N-foundress patches
+    foundressarray<-rep(NA,n)
+    i<-0
+    while (i <= n){
+      j <- rnbinom(1,size=Fs,prob=Fp)
+      if (j==0){i<-i}else{foundressarray[i]<-j;i<-i+1}
+    }
+    foundarthmean <- mean(foundressarray) #foundress arithmetic mean
+    foundharmmean <- length(foundressarray)/sum(1/foundressarray) #foundress harmonic mean
+    foundfreq <- hist(foundressarray,breaks=c(0:max(foundressarray)),include.lowest=F) #foundress frequencies
+    
+    #generates probability distribution of encountering j-foundress patch
+    foundressarray2 <- vector('numeric')
+    for (i in 1:n){
+      a <- rep(foundressarray[i],foundressarray[i])
+      foundressarray2 <- append(foundressarray2,a)          
+    }
+    
+    #samples from probability distribution to get n foundresses
+    foundressarray3 <- sample(foundressarray2,n,replace=T)
+    
+    #START LOOP 1 (ROWS)#
+    row <- ps
+    for (row in row:pe){ 
+      t <- 1
+      Sp <- row*u #lambda of distribution from which which the POPULATION foundresses samples male eggs 
+      k <- numeric(1)
+      o <- numeric(1)
+      x <- Fe-1 #x: maximum number of females a male can mate
+      xt <- 0
+      toteggslaid <- rep(NA,n) #vector total eggs laid of all foundresses
+      totsurvoff <- rep(NA,n) #vector surviving offspring of all foundresses
+      maleeggslaid <- rep(NA,n) #vector male eggs actually laid of focal foundresses
+      offeggslaid <- rep(NA,n) #vector offspring eggs actually laid of focal foundresses
+      survmale <- rep(NA,n) #vector surviving males of focal foundresses
+      survoff <- rep(NA,n) #vector surviving offspring of focal foundresses
+      primsexrat <- rep(NA,n) #vector of primary sex ratios of focal foundresses 
+      secsexrat <- rep(NA,n) #vector of secondary sex ratios of focal foundresses 
+      sda <- rep(NA,n)
+      sma <- rep(NA,n)
+      SD <- rep(NA,n)
+      S <- rep(NA,n)
+      w <- rep(NA,n)
+      
+          ##START LOOP 2.1 (POPULATION)##
+          while (t <= n){ 
+              k <- foundressarray3[t]
+              e <- rep(0,k) #vector of the egg potential of all females in a patch
+              l <- rep(0,k) #vector of eggs actually laid
+              i <- rep(0,k) #vector of male eggs actually laid
+              o <- rpois(1,Oa) #number of ovules for the patch
+              
+              #generate eggs
+              for (y in 1:k) e[y] <- rpois(1, Fe) 
+              if (sum(e) <= o) l <- e 
+              if (sum(e) > o){for (y in 1:k){l[y] <- floor(o*e[y]/sum(e))}} #if sum of egg vector(s) exceed number max number of ovules, then sum of egg arrays will be = max ovules, with each vector a proportion of each foundress' egg load. 
+              for (y in 1:k){ #generate male egg numbers for egg vector(s)
+                i[y] <- rpois(1,Sp)
+                if (i[y] > l[y]) i[y] <- l[y] #this is just to make sure the number of male eggs are not more than the total number of eggs that female can lay
+              }
+              fm <- i
+              ff <- l-i
+              toteggslaid[t] <- sum(l) #vector ***TOTAL BROOD*** eggs laid of ALL foundresses
+              maleeggslaid[t] <- fm[1] #vector male eggs actually laid by FOCAL foundress
+              offeggslaid[t] <- fm[1]+ff[1] #vector offspring eggs actually laid by FOCAL foundress
+              primsexrat[t] <- fm[1]/(fm[1]+ff[1]) #vector primary sex ratios of focal foundress
+              
+              #eggs mortality
+              if(Fe>Oa){scaled<-Oa}else{scaled<-Fe} #Fe is a proxy for average offspring laid (in an unconstrained patch) but if Oa<Fe, then Oa is a better proxy for average offspring laid
+              mk <- sum(l)*Dm/scaled #death rate/variance is scaled propotionally to brood size. The reference death rate/variance is calculated for average offspring of one foundress
+              vk <- sum(l)*Dv/scaled   
+              p <- mk/vk
+              s <- (mk^2)/(vk-mk)
+              death <- rnbinom(1,size=s,prob=p) #total number of egg deaths per patch
+              while (death>=toteggslaid[t]){death <- rnbinom(1,size=s,prob=p)} #deaths shouldn't be more than total eggs laid 
+              mp <- numeric(2*k)
+              for (y in 1:k) mp[y] <- fm[y] #this is to get the vector for the multinomial of male numbers 
+              for (y in (k+1):(2*k)) mp[y] <- ff[y-k] #this is the for the female vector   
+              deathdiv <- rmultinom(1,death,mp) #parcels the total number of deaths amongst male and female offspring of individual foundress, proportionally 
+              
+              if (k>5|death>0.90*toteggslaid[t]){ #this is to optimise for processing time
+                deathcount <- death
+                offspringvec <- mp 
+                while(deathcount>0){
+                  temp <- offspringvec 
+                  temp2 <- temp-rmultinom(1,1,mp)
+                  temp3 <- (temp2<0) 
+                  if(any(temp3)==T){temp<-offspringvec}else{offspringvec<-temp2;deathcount<-deathcount-1}
+                  for (y in 1:k){fm[y] <- offspringvec[y]} 
+                  for (y in 1:k){ff[y] <- offspringvec[y+k]}
+                }  
+              }else{
+                con <- numeric(2*k)
+                testdeath <- function(deathdiv){ #make sure deaths do not exceeds eggs (deathdiv classes should add up to death)
+                  for(y in 1:k) con[y] <- (deathdiv[y,1]>fm[y])
+                  for(y in 1:k) con[y+k] <- (deathdiv[y+k,1]>ff[y])
+                  return(any(con==1))
+                }
+                while(testdeath(deathdiv)==T){deathdiv <- rmultinom(1,death,mp)}
+                for (y in 1:k){fm[y] <- fm[y]-deathdiv[y,1]} 
+                for (y in 1:k){ff[y] <- ff[y]-deathdiv[y+k,1]}
+              } 
+                  
+              totsurvoff[t] <- sum(fm)+sum(ff) #vector ***TOTAL BROOD*** surviving offspring of ALL foundresses
+              survmale[t] <- fm[1] #vector surviving males of FOCAL foundress
+              survoff[t] <- fm[1]+ff[1] #vector surviving offspring of FOCAL foundress
+              secsexrat[t] <- fm[1]/(fm[1]+ff[1]) #vector of secondary sex ratios of FOCAL foundress
+               
+              if(sum(fm)>0&sum(ff)==0|sum(fm)==0&sum(ff)>0|ff[1]==0&fm[1]==0){
+                sma[t] <- sda[t] <- S[t] <- NA #if no mating on patch occurs, then son and daughter matings are undefined
+              }else{
+                
+                if (fm[1]==0){
+                  sma[t] <- NA #if there are no focal foundress sons, then proportion of matings by sons is undefined
+                }else{ 
+                  if ((sum(ff)/sum(fm)) > x){xt <- x}else{xt <- sum(ff)/sum(fm)}
+                  sma[t] <- fm[1]*xt 
+                }        
+                
+                if (ff[1]==0){
+                  sda[1] <- NA #if there are no focal foundress daughters, then daughters mated is undefined
+                  S[t] <- NA #if there are no focal foundress daughters, then daughters mated by sons is undefined
+                }else{
+                  if (xt < x){sda[t] <- ff[1]}else{sda[t] <- ff[1]*sum(fm)*x/(sum(ff))} 
+                  S[t] <- sda[t]*fm[1]/sum(fm)
+                }
+                
+              }
+              
+          t<-t+1
+          } 
+          ##END LOOP 2.1 (POPULATION)##
+          
+          SD <- sum(S,na.rm=T)/sum(sda,na.rm=T) #average probability of sibmating, ranges from 0 to 1 (calculated from patches where mating takes places, ie. excludes NA values)
+          vmRm <- (1/2)*1 #reproductive value of sons X relatedness of mother to sons
+          vfRf <- 1*(1/(2-SD)) #reproductive value of daughters X relatedness of mothers to daughters
+          
+          for (t in 1:n){
+            if (is.na(sma[t]&sda[t])==T){ #if no focal foundress offspring mate, then fitness is zero
+              w[t] <- 0 
+            }else if (is.na(sma[t])==T){ #if no focal foundress sons mate, then fitness through daughters only
+              w[t] <- vfRf*sda[t] 
+            }else if (is.na(sda[t])==T){ #if no focal foundress daughters mate, then fitness through sons only
+              w[t] <- vmRm*sma[t] 
+            }else{
+              w[t] <- vfRf*sda[t] + vmRm*sma[t]
+            }
+          }
+        
+          fitnessmat[row,row] <- mean(w)  
+          
+          sibmateprobmat[row,1] <- SD
+          toteggslaidmat[row,row] <- mean(toteggslaid,na.rm=T)
+          totsurvoffmat[row,row] <- mean(totsurvoff,na.rm=T)
+          totsurvoffvarmat[row,row] <- var(totsurvoff,na.rm=T)
+          maleeggslaidmat[row,row] <- mean(maleeggslaid,na.rm=T)
+          offeggslaidmat[row,row] <- mean(offeggslaid,na.rm=T)
+          survmalemat[row,row] <- mean(survmale,na.rm=T)
+          survmalevarmat[row,row] <- var(survmale,na.rm=T)
+          survoffmat[row,row] <- mean(survoff,na.rm=T)
+          survoffvarmat[row,row] <- var(survoff,na.rm=T)
+          primsexratmat[row,row] <- mean(primsexrat,na.rm=T)
+          primsexratvarmat[row,row] <- var(primsexrat,na.rm=T)
+          secsexratmat[row,row] <- mean(secsexrat,na.rm=T)
+          secsexratvarmat[row,row] <- var(secsexrat,na.rm=T)
+
+      
+          ##START LOOP 2.2 (COLUMNS)##
+          col <- ms
+          for (col in ms:me){ #number of sons loop
+                if (col != row){
+                  t <- 1
+                  Sm <- col*u #lambda of distribution from which which the MUTANT foundress samples male eggs 
+                  sma <- rep(NA,n)
+                  sda <- rep(NA,n)
+                  toteggslaid <- rep(NA,n)
+                  totsurvoff <- rep(NA,n)
+                  maleeggslaid <- rep(NA,n)
+                  offeggslaid <- rep(NA,n)
+                  survmale <- rep(NA,n)
+                  survoff <- rep(NA,n)
+                  primsexrat <- rep(NA,n)  
+                  secsexrat <- rep(NA,n) 
+                  w <- rep(NA,n)
+                 
+                  ###START LOOP 3 (MUTANT)###
+                  while (t <= n){ 
+                      k <- foundressarray3[t]
+                      e <- rep(0,k)
+                      l <- rep(0,k)
+                      i <- rep(0,k)
+                      o <- rpois(1,Oa)
+                      
+                      #generate eggs
+                      for (y in 1:k) e[y] <- rpois(1,Fe)
+                      if (sum(e) <= o) l <- e
+                      if (sum(e) > o) {for (y in 1:k){l[y] <- floor(o*e[y]/sum(e))}}
+                      i[1] <- rpois(1,Sm) #MUTANT
+                      if (i[1] > l[1]) i[1] <- l[1] 
+                      if (k>1){for (y in 2:k){ 
+                        i[y] <- rpois(1,Sp)
+                        if (i[y] > l[y]) i[y] <- l[y] 
+                      }}
+                      fm <- i
+                      ff <- l-i
+                      toteggslaid[t] <- sum(l)
+                      maleeggslaid[t] <- fm[1] #number of male eggs laid by MUTANT foundress
+                      offeggslaid[t] <- fm[1]+ff[1] #number of offspring eggs laid by MUTANT foundress
+                      primsexrat[t] <- fm[1]/(fm[1]+ff[1]) #vector primary sex ratios of focal foundress
+                      
+                      #eggs mortality
+                      if(Fe>Oa){scaled<-Oa}else{scaled<-Fe}
+                      mk <- sum(l)*Dm/scaled
+                      vk <- sum(l)*Dv/scaled
+                      p <- mk/vk
+                      s <- (mk^2)/(vk-mk)
+                      death <- rnbinom(1,size=s,prob=p)
+                      while (death>=toteggslaid[t]){death <- rnbinom(1,size=s,prob=p)}
+                      mp <- numeric(2*k)
+                      for (y in 1:k) mp[y] <- fm[y]   
+                      for (y in (k+1):(2*k)) mp[y] <- ff[y-k] 
+                      deathdiv <- rmultinom(1,death,mp)  
+                      
+                      if (k>5|death>0.90*toteggslaid[t]){ 
+                        deathcount <- death
+                        offspringvec <- mp 
+                        while(deathcount>0){
+                          temp <- offspringvec 
+                          temp2 <- temp-rmultinom(1,1,mp)
+                          temp3 <- (temp2<0) 
+                          if(any(temp3)==T){temp<-offspringvec}else{offspringvec<-temp2;deathcount<-deathcount-1}
+                          for (y in 1:k){fm[y] <- offspringvec[y]} 
+                          for (y in 1:k){ff[y] <- offspringvec[y+k]}
+                        }  
+                      }else{
+                        con <- numeric(2*k)
+                        testdeath <- function(deathdiv){ #make sure deaths do not exceeds eggs (deathdiv classes should add up to death)
+                          for(y in 1:k) con[y] <- (deathdiv[y,1]>fm[y])
+                          for(y in 1:k) con[y+k] <- (deathdiv[y+k,1]>ff[y])
+                          return(any(con==1))
+                        }
+                        while(testdeath(deathdiv)==T){deathdiv <- rmultinom(1,death,mp)}
+                        for (y in 1:k){fm[y] <- fm[y]-deathdiv[y,1]} 
+                        for (y in 1:k){ff[y] <- ff[y]-deathdiv[y+k,1]}
+                      }  
+
+                      totsurvoff[t] <- sum(fm)+sum(ff) #number of surviving offspring for all foundresses (including POPULATION offspring)
+                      survmale[t] <- fm[1] #number of survived males for MUTANT foundress 
+                      survoff[t] <- fm[1]+ff[1] #number of survived offspring for MUTANT foundress
+                      secsexrat[t] <- fm[1]/(fm[1]+ff[1]) #vector of secondary sex ratio of MUTANT foundress
+                      
+                      if(sum(fm)>0&sum(ff)==0|sum(fm)==0&sum(ff)>0|ff[1]==0&fm[1]==0){
+                        sma[t] <- sda[t] <- S[t] <- NA
+                      }else{
+                        
+                        if (fm[1]==0){
+                          sma[t] <- NA 
+                        }else{ 
+                          if ((sum(ff)/sum(fm)) > x){xt <- x}else{xt <- sum(ff)/sum(fm)}
+                          sma[t] <- fm[1]*xt 
+                        }        
+                        
+                        if (ff[1]==0){
+                          sda[1] <- NA 
+                          S[t] <- NA 
+                        }else{
+                          if (xt < x){sda[t] <- ff[1]}else{sda[t] <- ff[1]*sum(fm)*x/(sum(ff))} 
+                          S[t] <- sda[t]*fm[1]/sum(fm)
+                        }
+                        
+                      }
+                      
+                  t <- t+1  
+                  } 
+                  ###END LOOP 3 (MUTANT)###
+                  
+                  for (t in 1:n){
+                    if (is.na(sma[t]&sda[t])==T){ 
+                      w[t] <- 0 
+                    }else if (is.na(sma[t])==T){ 
+                      w[t] <- vfRf*sda[t] 
+                    }else if (is.na(sda[t])==T){ 
+                      w[t] <- vmRm*sma[t] 
+                    }else{
+                      w[t] <- vfRf*sda[t] + vmRm*sma[t]
+                    }
+                  }
+                  
+                  fitnessmat[row,col] <- mean(w)
+                  
+                  toteggslaidmat[row,col] <- mean(toteggslaid,na.rm=T)
+                  totsurvoffmat[row,col] <- mean(totsurvoff,na.rm=T)
+                  totsurvoffvarmat[row,col] <- var(totsurvoff,na.rm=T)
+                  maleeggslaidmat[row,col] <- mean(maleeggslaid,na.rm=T)
+                  offeggslaidmat[row,col] <- mean(offeggslaid,na.rm=T)
+                  survmalemat[row,col] <- mean(survmale,na.rm=T)
+                  survmalevarmat[row,col] <- var(survmale,na.rm=T)
+                  survoffmat[row,col] <- mean(survoff,na.rm=T)
+                  survoffvarmat[row,col] <- var(survoff,na.rm=T)
+                  primsexratmat[row,col] <- mean(primsexrat,na.rm=T)
+                  primsexratvarmat[row,col] <- var(primsexrat,na.rm=T)
+                  secsexratmat[row,col] <- mean(secsexrat,na.rm=T)
+                  secsexratvarmat[row,col] <- var(secsexrat,na.rm=T)
+                  
+              }} 
+          ##END LOOP 2.2 (COLUMNS)##
+      
+    } 
+    #END LOOP 1 (ROWS)#
+    
+    #Fitness lines for different populations
+    plotname <- paste0(sim,"-A",".svg")
+    svg(plotname,onefile=T) #saves plot to working directory
+    title <- paste0("Simulation #",sim)
+    plot((ms:me)*u, fitnessmat[1,ms:me], type="l", ylim=range(fitnessmat), main=title, xlab="Male eggs lambda",ylab="Inclusive fitness",lwd=1)
+    i <- ps
+    for(i in ps:pe){
+      lines((ms:me)*u, fitnessmat[i,ms:me],lwd=1)
+    }   
+    #Best strategy for each population
+    fitteststrat <- data.frame(max.col(fitnessmat)*u) 
+    #Fitness values for best strategies
+    fittestvalue <- data.frame(0)
+    i <- ps
+    for(i in ps:pe){
+      fittestvalue[i,] <- max(fitnessmat[i,])  #the fitness value of the best strategy
+      points(fitteststrat[i,1],fittestvalue[i,1],pch=20,col="red") #highlights fittestvalue with a red dot
+    }
+    dev.off()
+    
+    #Creates matrices of different simulation parameters
+    colborder <- data.frame(0) #column border for output 
+    toteggslaidbest <- data.frame(0) #mean total eggs laid per patch in best strategy 
+    totsurvoffbest <- data.frame(0) #mean total surviving offspring per patch in best strategy
+    totsurvoffvarbest <- data.frame(0) #variance of total surviving offspring in best strategy
+    toteggsmortbest <- data.frame(0) #mean mortality rate for total eggs laid per patch in best strategy
+    maleeggslaidbest <- data.frame(0) #mean male eggs actually laid per foundress in best strategy
+    offeggslaidbest <- data.frame(0) #mean offspring eggs actually laid per foundress in best strategy
+    survmalebest <- data.frame(0) #mean survived males per foundress in best strategy
+    survmalevarbest <- data.frame(0) #variance male offspring per foundress in best strategy
+    survoffbest <- data.frame(0) #mean survived offspring per foundress in best strategy 
+    survoffvarbest <- data.frame(0) #variance offspring per foundress in best strategy
+    primsexratbest <- data.frame(0) #primary sex ratio in best strategy
+    primsexratvarbest <- data.frame(0) #variance of primary sex ratio in best strategy
+    secsexratbest <- data.frame(0) #secondary sex ratio of best strategy
+    secsexratvarbest <- data.frame(0) #variance of secondary sex ratio in best strategy
+    franksexrat <- data.frame(0) #brood sex ratio given by Frank-Herre equation
+    broodprimsexrat <- data.frame(0) #brood primary sex ratios for different foundress numbers in best strategy
+    broodsecsexrat <- data.frame(0) #brood secondary sex ratios for different foundress numbers in best strategy
+    weightedmeanpopprimsexrat <- data.frame(0) #weighted average brood primary sex ratio (weighted by foundress frequencies)
+    weightedmeanpopsecsexrat <- data.frame(0) #weighted average brood secondary sex ratio (weighted by foundress frequencies)
+    
+    i <- ps
+    for(i in ps:pe){
+      
+      colborder[i,1]<- c("|") 
+      
+      toteggslaidbest[i,] <- toteggslaidmat[i,max.col(fitnessmat)[i]]
+      totsurvoffbest[i,] <- totsurvoffmat[i,max.col(fitnessmat)[i]]
+      totsurvoffvarbest[i,] <- totsurvoffvarmat[i,max.col(fitnessmat)[i]]
+      toteggsmortbest[i,] <-  (toteggslaidbest[i,]-totsurvoffbest[i,])/toteggslaidbest[i,]
+      maleeggslaidbest[i,] <- maleeggslaidmat[i,max.col(fitnessmat)[i]]
+      offeggslaidbest[i,] <- offeggslaidmat[i,max.col(fitnessmat)[i]]
+      survmalebest[i,] <- survmalemat[i,max.col(fitnessmat)[i]]
+      survmalevarbest[i,] <- survmalevarmat[i,max.col(fitnessmat)[i]]
+      survoffbest[i,] <- survoffmat[i,max.col(fitnessmat)[i]]
+      survoffvarbest[i,] <- survoffvarmat[i,max.col(fitnessmat)[i]]
+      primsexratbest[i,] <- primsexratmat[i,max.col(fitnessmat)[i]]
+      primsexratvarbest[i,] <- primsexratvarmat[i,max.col(fitnessmat)[i]]
+      secsexratbest[i,] <- secsexratmat[i,max.col(fitnessmat)[i]]
+      secsexratvarbest[i,] <- secsexratvarmat[i,max.col(fitnessmat)[i]]
+      
+    }  
+    
+    poplambda <- rep(1:pe*u)
+
+    equilibrium <- data.frame(0)
+    equils <- 0
+    i <- ps
+    for(i in ps:pe){
+      if(poplambda[i]==fitteststrat[i,]){ 
+        equilibrium[i,] <- c("Yes")
+        equils <- equils + 1}
+      else 
+        equilibrium[i,] <- c("No")
+    }
+    
+    x <- data.frame(round(foundarthmean,3),round(foundharmmean,3))
+    colnames(x) <- c("Arithmetic"," Harmonic")
+    
+    y <- data.frame(equilibrium,poplambda,round(sibmateprobmat,2),round(toteggslaidbest,2),round(totsurvoffbest,2),round(totsurvoffvarbest,2),round(toteggsmortbest,3),colborder,colborder,
+                    fitteststrat,round(fittestvalue,2),                   
+                    round(maleeggslaidbest,2),round(offeggslaidbest,2),round(primsexratbest,3),round(primsexratvarbest,3),colborder,
+                    round(survmalebest,2),round(survmalevarbest,2),round(survoffbest,2),round(survoffvarbest,2),round(secsexratbest,3),round(secsexratvarbest,3))  
+    colnames(y) <- c("ESS","Pop.Strat","Pop.Inbr","Brood.Laid","Brood.Surv","Brood.Surv.Var","Mort.Rate","|","|",
+                     "Best.Strat","Incl.Fit",                
+                     "M.Laid","Off.Laid","Prim.SR","Prim.SR.Var","|",
+                     "M.Surv","M.Surv.Var","Off.Surv","Off.Var","Sec.SR","Sec.SR.Var")
+    
+    
+    simulationparameters <- paste0("sim=",sim,",Fs=",Fs,",Fp=",Fp,",Fe=",Fe,",Oa=", Oa,",Dm=",Dm,",Dv=",Dv,",u=",u,",ps=",
+                                  ps*u,",pe=",pe*u,",ms=",ms*u,
+                                  ",me=",me*u,",n=",n)
+    
+    #filenamey <- paste0(sim,"-AllocationStrategies",".csv") 
+    #write.csv(y[ps:pe,],filenamey,row.names=F) 
+    
+    a <- foundressarray
+    b <- foundressarray3
+    
+    return(list("Simulation Parameters"=simulationparameters,
+                "Date & Time"=Sys.time(),
+                "Run Time"=proc.time()-ptm,
+                "Foundress Mean"=x,
+                "Foundress Count"=round(ftable(a)/n,4),
+                "Foundress Count (weighted)"=round(ftable(b)/n,4),
+                "Allocation Strategies"=y[ps:pe,]
+                ))
+
+  } #after error checks
+} #end entire NMALES function
+
+
+
+
+resim <- function(sim=sim,Fe=Fe,Oa=Oa,Dm=Dm,Dv=Dv,ESS=ESS,maxf=maxf,n=n){
+  
+  #input the parameters used in the malemod simulations, as well as the ESS obtained
+  #specify the maximum number of foundresses on a patch to test (starts with 1F per patch)
+  #other parameters are the same as above 
+  
+  simulationparameters <- paste0("sim=",sim,",Fe=",Fe,",Oa=",Oa,",Dm=",Dm,",Dv=",Dv,",ESS=",ESS,",maxf=",maxf,",n=",n)
+  
+  Sp <- ESS
+  x <- Fe-1 #x: maximum number of females a male can mate
+  
+  totmaleeggslaidvec <- rep(0,maxf) 
+  totmaleeggslaidvarvec <- rep(0,maxf) 
+  totfemaleeggslaidvec <- rep(0,maxf) 
+  totfemaleeggslaidvarvec <- rep(0,maxf) 
+  toteggslaidvec <- rep(0,maxf) 
+  toteggslaidvarvec <- rep(0,maxf) 
+  totsurvmalevec <- rep(0,maxf)
+  totsurvmalevarvec <- rep(0,maxf)
+  totsurvfemalevec <- rep(0,maxf)
+  totsurvfemalevarvec <- rep(0,maxf)
+  totsurvoffvec <- rep(0,maxf) 
+  totsurvoffvarvec <- rep(0,maxf) 
+  maleeggslaidvec <- rep(0,maxf) 
+  maleeggslaidvarvec <- rep(0,maxf) 
+  femaleeggslaidvec <- rep(0,maxf) 
+  femaleeggslaidvarvec <- rep(0,maxf) 
+  offeggslaidvec <- rep(0,maxf) 
+  offeggslaidvarvec <- rep(0,maxf) 
+  survmalevec <- rep(0,maxf) 
+  survmalevarvec <- rep(0,maxf) 
+  survfemalevec <- rep(0,maxf) 
+  survfemalevarvec <- rep(0,maxf) 
+  survoffvec <- rep(0,maxf) 
+  survoffvarvec <- rep(0,maxf) 
+  sibmateprobvec <- rep(0,maxf) 
+  primsexratvec <- rep(0,maxf) 
+  primsexratvarvec <- rep(0,maxf) 
+  secsexratvec <- rep(0,maxf)  
+  secsexratvarvec <- rep(0,maxf) 
+  
+  
+  #fondresses per fig (fpf) loop from 1 to maxf
+  for(fpf in 1:maxf){ 
+    
+    t <- 1 #reset counter
+    
+    foundressarray<-rep(fpf,n)
+    k <- numeric(1)
+    o <- numeric(1)
+    xt <- 0
+    totmaleeggslaid <- rep(NA,n) 
+    totfemaleeggslaid <- rep(NA,n) 
+    toteggslaid <- rep(NA,n) 
+    totsurvoff <- rep(NA,n) 
+    maleeggslaid <- rep(NA,n) 
+    femaleeggslaid <- rep(NA,n) 
+    offeggslaid <- rep(NA,n) 
+    totsurvmale <- rep(NA,n) 
+    totsurvfemale <- rep(NA,n) 
+    survmale <- rep(NA,n) 
+    survfemale <- rep(NA,n) 
+    survoff <- rep(NA,n) 
+    primsexrat <- rep(NA,n)  
+    secsexrat <- rep(NA,n)
+    sda <- rep(NA,n)
+    sma <- rep(NA,n)
+    SD <- rep(NA,n)
+    S <- rep(NA,n)
+    
+    #all foundresses use the same strategy, no mutants
+    while (t <= n){ 
+      k <- foundressarray[t]
+      e <- rep(0,k) #vector of the egg potential of all females in a patch
+      l <- rep(0,k) #vector of eggs actually laid
+      i <- rep(0,k) #vector of male eggs actually laid
+      o <- rpois(1,Oa) #number of ovules for the patch
+      
+      #generate eggs
+      for (y in 1:k) e[y] <- rpois(1, Fe) 
+      if (sum(e) <= o) l <- e 
+      if (sum(e) > o){for (y in 1:k){l[y] <- floor(o*e[y]/sum(e))}} #if sum of egg vector(s) exceed number max number of ovules, then sum of egg arrays will be = max ovules, with each vector a proportion of each foundress' egg load. 
+      for (y in 1:k){ #generate male egg numbers for egg vector(s)
+        i[y] <- rpois(1,Sp)
+        if (i[y] > l[y]) i[y] <- l[y] #this is just to make sure the number of male eggs are not more than the total number of eggs that female can lay
+      }
+      fm <- i
+      ff <- l-i
+      totmaleeggslaid[t] <- sum(fm) #vector ***TOTAL BROOD*** male eggs laid of ALL foundresses
+      totfemaleeggslaid[t] <- sum(ff) #vector ***TOTAL BROOD*** female eggs laid of ALL foundresses
+      toteggslaid[t] <- sum(l) #vector ***TOTAL BROOD*** male and female eggs laid of ALL foundresses
+      maleeggslaid[t] <- fm[1] #vector male eggs actually laid by FOCAL foundress
+      femaleeggslaid[t] <-ff[1] #vector female eggs actually laid by FOCAL foundress
+      offeggslaid[t] <- fm[1]+ff[1] #vector offspring eggs actually laid by FOCAL foundress
+      primsexrat[t] <- fm[1]/(fm[1]+ff[1]) #vector primary sex ratios of focal foundress
+      
+      #eggs mortality
+      if(Fe>Oa){scaled<-Oa}else{scaled<-Fe} #Fe is a proxy for average offspring laid (in an unconstrained patch) but if Oa<Fe, then Oa is a better proxy for average offspring laid
+      mk <- sum(l)*Dm/scaled #death rate/variance is scaled propotionally to brood size. The reference death rate/variance is calculated for average offspring of one foundress
+      vk <- sum(l)*Dv/scaled   
+      p <- mk/vk
+      s <- (mk^2)/(vk-mk)
+      death <- rnbinom(1,size=s,prob=p) #total number of egg deaths per patch
+      while (death>=toteggslaid[t]){death <- rnbinom(1,size=s,prob=p)} #deaths shouldn't be more than total eggs laid 
+      mp <- numeric(2*k)
+      for (y in 1:k) mp[y] <- fm[y] #this is to get the vector for the multinomial of male numbers 
+      for (y in (k+1):(2*k)) mp[y] <- ff[y-k] #this is the for the female vector   
+      deathdiv <- rmultinom(1,death,mp) #parcels the total number of deaths amongst male and female offspring of individual foundress, proportionally 
+      
+      if (k>5|death>0.90*toteggslaid[t]){ #this is to optimise for processing time
+        deathcount <- death
+        offspringvec <- mp 
+        while(deathcount>0){
+          temp <- offspringvec 
+          temp2 <- temp-rmultinom(1,1,mp)
+          temp3 <- (temp2<0) 
+          if(any(temp3)==T){temp<-offspringvec}else{offspringvec<-temp2;deathcount<-deathcount-1}
+          for (y in 1:k){fm[y] <- offspringvec[y]} 
+          for (y in 1:k){ff[y] <- offspringvec[y+k]}
+        }  
+      }else{
+        con <- numeric(2*k)
+        testdeath <- function(deathdiv){ #make sure deaths do not exceeds eggs (deathdiv classes should add up to death)
+          for(y in 1:k) con[y] <- (deathdiv[y,1]>fm[y])
+          for(y in 1:k) con[y+k] <- (deathdiv[y+k,1]>ff[y])
+          return(any(con==1))
+        }
+        while(testdeath(deathdiv)==T){deathdiv <- rmultinom(1,death,mp)}
+        for (y in 1:k){fm[y] <- fm[y]-deathdiv[y,1]} 
+        for (y in 1:k){ff[y] <- ff[y]-deathdiv[y+k,1]}
+      } 
+      
+      totsurvmale[t] <- sum(fm) #vector ***TOTAL BROOD*** male surviving offspring of ALL foundresses
+      totsurvfemale[t] <- sum(ff) #vector ***TOTAL BROOD*** female surviving offspring of ALL foundresses
+      totsurvoff[t] <- sum(fm)+sum(ff) #vector ***TOTAL BROOD*** surviving offspring of ALL foundresses
+      survmale[t] <- fm[1] #vector surviving males of FOCAL foundress
+      survfemale[t] <- ff[1] #vector surviving females of FOCAL foundress
+      survoff[t] <- fm[1]+ff[1] #vector surviving offspring of FOCAL foundress
+      secsexrat[t] <- fm[1]/(fm[1]+ff[1]) #vector of secondary sex ratios of FOCAL foundress
+      
+      if(sum(fm)>0&sum(ff)==0|sum(fm)==0&sum(ff)>0|ff[1]==0&fm[1]==0){
+        sma[t] <- sda[t] <- S[t] <- NA #if no mating on patch occurs, then son and daughter matings are undefined
+      }else{
+        
+        if (fm[1]==0){
+          sma[t] <- NA #if there are no focal foundress sons, then proportion of matings by sons is undefined
+        }else{ 
+          if ((sum(ff)/sum(fm)) > x){xt <- x}else{xt <- sum(ff)/sum(fm)}
+          sma[t] <- fm[1]*xt 
+        }        
+        
+        if (ff[1]==0){
+          sda[1] <- NA #if there are no focal foundress daughters, then daughters mated is undefined
+          S[t] <- NA #if there are no focal foundress daughters, then daughters mated by sons is undefined
+        }else{
+          if (xt < x){sda[t] <- ff[1]}else{sda[t] <- ff[1]*sum(fm)*x/(sum(ff))} 
+          S[t] <- sda[t]*fm[1]/sum(fm)
+        }
+      } 
+      
+      t<-t+1
+    } #end of inner loop
+    
+    totmaleeggslaidvec[fpf] <- mean(totmaleeggslaid)
+    totmaleeggslaidvarvec[fpf] <- var(totmaleeggslaid,na.rm=T)
+    totfemaleeggslaidvec[fpf] <- mean(totfemaleeggslaid)
+    totfemaleeggslaidvarvec[fpf] <- var(totfemaleeggslaid,na.rm=T)
+    toteggslaidvec[fpf] <- mean(toteggslaid)
+    toteggslaidvarvec[fpf] <- var(toteggslaid,na.rm=T)
+    totsurvmalevec[fpf] <- mean(totsurvmale)
+    totsurvmalevarvec[fpf] <- var(totsurvmale,na.rm=T)
+    totsurvfemalevec[fpf] <- mean(totsurvfemale)
+    totsurvfemalevarvec[fpf] <- var(totsurvfemale,na.rm=T)
+    totsurvoffvec[fpf] <-  mean(totsurvoff)
+    totsurvoffvarvec[fpf] <- var(totsurvoff,na.rm=T)
+    maleeggslaidvec[fpf] <- mean(maleeggslaid)
+    maleeggslaidvarvec[fpf] <- var(maleeggslaid,na.rm=T)
+    femaleeggslaidvec[fpf] <- mean(femaleeggslaid)
+    femaleeggslaidvarvec[fpf] <- var(femaleeggslaid,na.rm=T)
+    offeggslaidvec[fpf] <- mean(offeggslaid)
+    offeggslaidvarvec[fpf] <- var(offeggslaid,na.rm=T)
+    survmalevec[fpf] <- mean(survmale)
+    survmalevarvec[fpf] <- var(survmale,na.rm=T)
+    survfemalevec[fpf] <- mean(survfemale)
+    survfemalevarvec[fpf] <- var(survfemale,na.rm=T)
+    survoffvec[fpf] <- mean(survoff)
+    survoffvarvec[fpf] <- var(survoff,na.rm=T)
+    sibmateprobvec[fpf] <- sum(S,na.rm=T)/sum(sda,na.rm=T)  
+    primsexratvec[fpf] <- mean(primsexrat)
+    primsexratvarvec[fpf] <- var(primsexrat,na.rm=T)
+    secsexratvec[fpf] <- mean(secsexrat,na.rm=T)
+    secsexratvarvec[fpf] <- var(secsexrat,na.rm=T)
+    
+  } #end of pfp loop
+  
+  
+  men1.1 <- data.frame(1:maxf,round(sibmateprobvec,2),round(totmaleeggslaidvec,2),round(totmaleeggslaidvarvec,2),round(totfemaleeggslaidvec,2),round(totfemaleeggslaidvarvec,2),
+                       round(toteggslaidvec,2),round(toteggslaidvarvec,2))
+  men1.2 <- data.frame(1:maxf,round(totsurvmalevec,2),round(totsurvmalevarvec,2),round(totsurvfemalevec,2),round(totsurvfemalevarvec,2),
+                       round(totsurvoffvec,2),round(totsurvoffvarvec,2))
+  
+  men2.1 <- data.frame(1:maxf,round(maleeggslaidvec,2),round(maleeggslaidvarvec,2),round(femaleeggslaidvec,2),round(femaleeggslaidvarvec,2),
+                       round(offeggslaidvec,2),round(offeggslaidvarvec,2),round(primsexratvec,3),round(primsexratvarvec,3))
+  men2.2 <- data.frame(1:maxf,round(survmalevec,2),round(survmalevarvec,2),round(survfemalevec,2),round(survfemalevarvec,2),
+                       round(survoffvec,2),round(survoffvarvec,2),round(secsexratvec,3),round(secsexratvarvec,3))
+  
+  
+  colnames(men1.1) <- c("F#","Pop.Inbr","Brood.M.Laid","Brood.M.Laid.Var","Brood.F.Laid","Brood.F.Laid.Var",
+                        "Brood.Laid","Brood.Laid.Var")
+  colnames(men1.2) <- c("F#","Brood.M.Surv","Brood.M.Surv.Var","Brood.F.Surv","Brood.F.Surv.Var",
+                        "Brood.Surv","Brood.Surv.Var")
+  
+  colnames(men2.1) <- c("F#","M.Laid","M.Laid.Var","F.Laid","F.Laid.Var",
+                        "Off.Laid","Off.Laid.Var","Prim.SR","Prim.SR.Var")
+  colnames(men2.2) <- c("F#","M.Surv","M.Surv.Var","F.Surv","F.Surv.Var",
+                        "Off.Surv","Off.Surv.Var","Sec.SR","Sec.SR.Var")
+  
+  
+  for (i in 1:maxf){
+    plotname <- paste0(sim,".svg")
+    svg(plotname,onefile=F)
+    title <- paste0("Simulation #",sim)
+    plot(1:maxf,secsexratvec,pch=19,col="blue",main=title,xlab="Foundress number",ylab="Proportion males",xaxt = "n")
+    axis(side=1,at=seq(1,maxf,1))
+    dev.off()
+  }
+  
+  num <- 1:maxf
+  
+  return(list("Simulation Parameters"=simulationparameters,
+              "Date & Time"=Sys.time(),
+              "MEN Model Brood Predictions - Eggs Laid"=men1.1,
+              "MEN Model Brood Predictions - After Mortality"=men1.2,
+              "MEN Model Individual Foundress Predictions - Eggs Laid"=men2.1,
+              "MEN Model Individual Foundress Predictions - After Mortality"=men2.2
+  ))
+  
+} 
+
