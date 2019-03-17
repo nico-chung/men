@@ -1,2 +1,2 @@
 # MEN
-Male Egg Number (MEN) model for Chung et al (2019) Oikos
+Male Egg Number model for Chung et al. 2019 Oikos
